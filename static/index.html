@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Rust WebSocket Game Demo</title>
+    <style>
+        #gameCanvas {
+            border: 1px solid black;
+        }
+    </style>
+</head>
+<body>
+    <h1>Rust WebSocket Game Demo</h1>
+    <canvas id="gameCanvas" width="800" height="600"></canvas>
+
+    <script>
+        const socket = new WebSocket('ws://localhost:8080/ws');
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        let playerId = null;
+        let gameState = { players: [] };
+
+        socket.onopen = function(e) {
+            console.log('Connected to server');
+        };
+
+        socket.onmessage = function(event) {
+            const data = JSON.parse(event.data);
+            if (data.GameState) {
+                gameState = data.GameState;
+                drawGame();
+            } else if (data.Join) {
+                if (!playerId) {
+                    playerId = data.Join.id;
+                }
+            }
+        };
+
+        socket.onclose = function(event) {
+            console.log('Disconnected from server');
+        };
+
+        function drawGame() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            gameState.players.forEach(player => {
+                ctx.fillStyle = player.id === playerId ? 'blue' : 'red';
+                ctx.beginPath();
+                ctx.arc(player.x, player.y, 10, 0, 2 * Math.PI);
+                ctx.fill();
+            });
+        }
+
+        canvas.addEventListener('click', function(event) {
+            const rect = canvas.getBoundingClientRect();
+            const x = event.clientX - rect.left;
+            const y = event.clientY - rect.top;
+            socket.send(JSON.stringify({
+                Move: { id: playerId, x, y }
+            }));
+        });
+    </script>
+</body>
+</html>

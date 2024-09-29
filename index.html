@@ -1,0 +1,420 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Document</title>
+    <script>
+    document.addEventListener("DOMContentLoaded", () => {
+    const canvas = document.getElementById("canvas");
+    const ctx = canvas.getContext("2d");
+
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+
+    let gameState = {
+        lastFrameTime: 0,
+        balls: [],
+        grid: [],
+        players: [],
+        emitters: [],
+        bases: []
+    };
+    window.gameState = gameState;
+
+    class Player {
+        constructor(color, ballColor) {
+            this.color = color;
+            this.ballColor = ballColor;
+        }
+    }
+
+    class Ball {
+        constructor(x, y, vx, vy, radius = 10, player) {
+            this.x = x;
+            this.y = y;
+            this.vx = vx;
+            this.vy = vy;
+            this.radius = radius;
+            this.player = player;
+            this.health = 3; // Add health attribute
+        }
+
+        update(deltaTime) {
+            this.x += this.vx * deltaTime;
+            this.y += this.vy * deltaTime;
+
+            if (this.x - this.radius < 0 || this.x + this.radius > canvas.width) {
+                this.vx *= -1;
+            }
+            if (this.y - this.radius < 0 || this.y + this.radius > canvas.height) {
+                this.vy *= -1;
+            }
+        }
+
+        takeDamage(amount) {
+            this.health -= amount;
+            if (this.health <= 0) {
+                // Remove the ball from the game
+                const index = gameState.balls.indexOf(this);
+                if (index > -1) {
+                    gameState.balls.splice(index, 1);
+                }
+            }
+        }
+
+        reverseDirection() {
+            this.vx *= -1;
+            this.vy *= -1;
+        }
+
+        render(ctx) {
+            ctx.fillStyle = this.player.ballColor;
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Draw health indicators
+            ctx.fillStyle = 'white';
+            ctx.font = '12px Arial';
+            ctx.fillText(this.health, this.x - 4, this.y + 4);
+        }
+    }
+
+    class Grid {
+        constructor(x, y, w, h) {
+            this.x = x;
+            this.y = y;
+            this.w = w;
+            this.h = h;
+            this.owner = null;
+        }
+
+        checkCollision(ball) {
+            return ball.x > this.x && ball.x < this.x + this.w &&
+                   ball.y > this.y && ball.y < this.y + this.h;
+        }
+
+        render(ctx) {
+            ctx.fillStyle = this.owner ? this.owner.color : "white";
+            ctx.fillRect(this.x, this.y, this.w, this.h);
+            ctx.strokeStyle = "rgba(0, 0, 0, 0.1)";
+            ctx.strokeRect(this.x, this.y, this.w, this.h);
+        }
+    }
+
+    class Emitter {
+        constructor(x, y, player) {
+            this.x = x;
+            this.y = y;
+            this.player = player;
+            this.lastEmitTime = 0;
+            this.emitInterval = 2000; // Emit every 2 seconds
+            this.health = 3; // Add health attribute
+        }
+
+        takeDamage(amount) {
+            this.health -= amount;
+            if (this.health <= 0) {
+                // Remove the emitter from the game
+                const index = gameState.emitters.indexOf(this);
+                if (index > -1) {
+                    gameState.emitters.splice(index, 1);
+                }
+            }
+        }
+
+        emit() {
+            // Emit a ball in a random direction
+            const angle = Math.random() * Math.PI * 2;
+            const speed = 100 + Math.random() * 100;
+            const vx = Math.cos(angle) * speed;
+            const vy = Math.sin(angle) * speed;
+            gameState.balls.push(new Ball(this.x, this.y, vx, vy, 10, this.player));
+        }
+
+        render(ctx) {
+            // Update the emitter before rendering
+            const currentTime = performance.now();
+            if (currentTime - this.lastEmitTime > this.emitInterval) {
+                this.emit();
+                this.lastEmitTime = currentTime;
+            }
+
+            ctx.fillStyle = this.player.color;
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, 15, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.strokeStyle = 'white';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+
+            // Draw health indicators
+            ctx.fillStyle = 'white';
+            ctx.font = '12px Arial';
+            ctx.fillText(this.health, this.x - 4, this.y + 4);
+        }
+    }
+
+    class Base {
+        constructor(x, y, player) {
+            this.x = x;
+            this.y = y;
+            this.player = player;
+            this.health = 100;
+            this.size = 50;
+
+            // Emitting properties
+            this.lastEmitTime = 0;
+            this.emitInterval = 2000; // Emit every 2 seconds
+        }
+
+        takeDamage(amount) {
+            this.health -= amount;
+            if (this.health <= 0) {
+                endGame(this.player);
+            }
+        }
+
+        emit() {
+            // Emit a ball in a random direction
+            const angle = Math.random() * Math.PI * 2;
+            const speed = 100 + Math.random() * 100;
+            const vx = Math.cos(angle) * speed;
+            const vy = Math.sin(angle) * speed;
+            gameState.balls.push(new Ball(this.x, this.y, vx, vy, 10, this.player));
+        }
+
+        render(ctx) {
+            // Update the base before rendering
+            const currentTime = performance.now();
+            if (currentTime - this.lastEmitTime > this.emitInterval) {
+                this.emit();
+                this.lastEmitTime = currentTime;
+            }
+
+            ctx.fillStyle = this.player.color;
+            ctx.fillRect(this.x - this.size/2, this.y - this.size/2, this.size, this.size);
+
+            // Health bar
+            ctx.fillStyle = 'red';
+            ctx.fillRect(this.x - this.size/2, this.y - this.size/2 - 10, this.size, 5);
+            ctx.fillStyle = 'green';
+            ctx.fillRect(this.x - this.size/2, this.y - this.size/2 - 10, this.size * (this.health / 100), 5);
+        }
+    }
+
+    function render() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        // Update and render grid cells
+        for (let cell of gameState.grid) {
+            cell.render(ctx);
+        }
+
+        // Update and render balls
+        for (let i = gameState.balls.length - 1; i >= 0; i--) {
+            const ball = gameState.balls[i];
+
+            // Update ball position
+            const deltaTime = (performance.now() - gameState.lastFrameTime) / 1000;
+            ball.update(deltaTime);
+
+            // Check collisions with grid
+            for (let cell of gameState.grid) {
+                if (cell.checkCollision(ball)) {
+                    if (cell.owner && cell.owner !== ball.player) {
+                        ball.reverseDirection();
+                        ball.takeDamage(1); // Ball takes damage upon collision
+                    }
+                    cell.owner = ball.player;
+                }
+            }
+
+            // Check for collisions with other balls
+            for (let j = i - 1; j >= 0; j--) {
+                const otherBall = gameState.balls[j];
+                if (ball.player !== otherBall.player) {
+                    const dx = ball.x - otherBall.x;
+                    const dy = ball.y - otherBall.y;
+                    const distance = Math.hypot(dx, dy);
+                    if (distance < ball.radius + otherBall.radius) {
+                        // Balls collide
+                        ball.takeDamage(1);
+                        otherBall.takeDamage(1);
+                        // Reflect their velocities
+                        [ball.vx, otherBall.vx] = [otherBall.vx, ball.vx];
+                        [ball.vy, otherBall.vy] = [otherBall.vy, ball.vy];
+                    }
+                }
+            }
+
+            // Check for collisions with bases
+            for (let base of gameState.bases) {
+                if (base.player !== ball.player &&
+                    Math.abs(ball.x - base.x) < base.size/2 + ball.radius &&
+                    Math.abs(ball.y - base.y) < base.size/2 + ball.radius) {
+                    base.takeDamage(1);
+                    ball.takeDamage(1);
+                }
+            }
+
+            // Check for collisions with emitters
+            for (let emitter of gameState.emitters) {
+                if (emitter.player !== ball.player) {
+                    const dx = ball.x - emitter.x;
+                    const dy = ball.y - emitter.y;
+                    const distance = Math.hypot(dx, dy);
+                    if (distance < ball.radius + 15) { // 15 is the emitter's radius
+                        emitter.takeDamage(1);
+                        ball.takeDamage(1);
+                    }
+                }
+            }
+
+            // Render the ball
+            ball.render(ctx);
+        }
+
+        // Update and render emitters
+        for (let emitter of gameState.emitters) {
+            emitter.render(ctx);
+        }
+
+        // Update and render bases
+        for (let base of gameState.bases) {
+            base.render(ctx);
+        }
+
+        gameState.lastFrameTime = performance.now();
+        if (!gameState.gameOver) {
+            requestAnimationFrame(render);
+        }
+    }
+
+    function init() {
+        // Clear previous game state
+        gameState.lastFrameTime = 0;
+        gameState.balls = [];
+        gameState.grid = [];
+        gameState.players = [];
+        gameState.emitters = [];
+        gameState.bases = [];
+        gameState.gameOver = false;
+
+        gameState.players.push(new Player("#8A2BE2", "#4B0082")); // Purple and darker purple
+        gameState.players.push(new Player("#32CD32", "#006400")); // Lime green and dark green
+
+        // Create bases at the corners
+        const baseSize = 50;
+        gameState.bases.push(new Base(baseSize / 2, canvas.height - baseSize / 2, gameState.players[0])); // Bottom left corner
+        gameState.bases.push(new Base(canvas.width - baseSize / 2, baseSize / 2, gameState.players[1])); // Top right corner
+
+        let gridRows = 20;
+        let gridCols = 20;
+        let gridRowSize = canvas.width / gridRows;
+        let gridColSize = canvas.height / gridCols;
+
+        for (let i = 0; i < gridRows; i++) {
+            for (let j = 0; j < gridCols; j++) {
+                gameState.grid.push(
+                    new Grid(
+                        i * gridRowSize,
+                        j * gridColSize,
+                        gridRowSize,
+                        gridColSize
+                    )
+                );
+            }
+        }
+
+        canvas.addEventListener('click', handleClick);
+
+        gameState.lastFrameTime = performance.now();
+        requestAnimationFrame(render);
+    }
+
+    function handleClick(event) {
+        if (gameState.gameOver) return; // Prevent interaction when game is over
+
+        const rect = canvas.getBoundingClientRect();
+        const x = event.clientX - rect.left;
+        const y = event.clientY - rect.top;
+
+        for (let cell of gameState.grid) {
+            if (x >= cell.x && x < cell.x + cell.w && y >= cell.y && y < cell.y + cell.h) {
+                if (cell.owner) {
+                    gameState.emitters.push(new Emitter(cell.x + cell.w / 2, cell.y + cell.h / 2, cell.owner));
+                }
+                break;
+            }
+        }
+    }
+
+    function endGame(losingPlayer) {
+        gameState.gameOver = true;
+        const winner = gameState.players.find(p => p !== losingPlayer);
+        alert(`Game Over! ${winner.color === "#8A2BE2" ? "Purple" : "Green"} player wins!`);
+
+        // Reset the game after a short delay
+        setTimeout(() => {
+            init();
+        }, 1000);
+    }
+
+    window.addEventListener('resize', () => {
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+
+        // Update grid
+        gameState.grid = [];
+        let gridRows = 20;
+        let gridCols = 20;
+        let gridRowSize = canvas.width / gridRows;
+        let gridColSize = canvas.height / gridCols;
+
+        for (let i = 0; i < gridRows; i++) {
+            for (let j = 0; j < gridCols; j++) {
+                gameState.grid.push(
+                    new Grid(
+                        i * gridRowSize,
+                        j * gridColSize,
+                        gridRowSize,
+                        gridColSize
+                    )
+                );
+            }
+        }
+
+        // Update base positions
+        const baseSize = 50;
+        if (gameState.bases.length >= 2) {
+            gameState.bases[0].x = baseSize / 2;
+            gameState.bases[0].y = canvas.height - baseSize / 2;
+
+            gameState.bases[1].x = canvas.width - baseSize / 2;
+            gameState.bases[1].y = baseSize / 2;
+        }
+    });
+
+    init();
+});
+
+
+    </script>
+    <style>
+        #canvas {
+            width: 100%;
+            height: 100%;
+        }
+    </style>
+</head>
+
+<body>
+    <canvas id="canvas">
+
+    </canvas>
+</body>
+
+</html>
