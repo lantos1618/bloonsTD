@@ -10,7 +10,7 @@ use tokio::sync::{mpsc, Mutex};
 use uuid::Uuid;
 
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, Debug)]
 struct Player {
     id: String,
     color: String,
@@ -19,7 +19,7 @@ struct Player {
     y: f32,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, Debug)]
 struct Ball {
     x: f32,
     y: f32,
@@ -29,14 +29,14 @@ struct Ball {
     player_id: String,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, Debug)]
 struct Emitter {
     x: f32,
     y: f32,
     player_id: String,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, Debug)]
 struct Base {
     x: f32,
     y: f32,
@@ -51,7 +51,7 @@ struct GameRoom {
     bases: Vec<Base>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 #[serde(tag = "type")]
 enum GameMessage {
     JoinRoom { room_id: String, player_id: String },
@@ -149,6 +149,7 @@ async fn websocket_handler(
     while let Some(Ok(msg)) = msg_stream.next().await {
         if let Message::Text(text) = msg {
             let game_msg: GameMessage = serde_json::from_str(&text).unwrap();
+            println!("< {:?}", game_msg);
             handle_game_message(&app_state, game_msg, room_id.clone()).await;
         }
     }

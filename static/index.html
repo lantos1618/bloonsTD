@@ -50,6 +50,8 @@
                 requestAnimationFrame(render);
             }
 
+            let roomId = prompt("room id?");
+
             // WebSocket Setup
             ws = new WebSocket('ws://' + window.location.host + '/ws');
 
@@ -86,6 +88,7 @@
 
             canvas.addEventListener('click', (event) => {
                 if (!playerId) return;
+                console.log("aaa")
                 const rect = canvas.getBoundingClientRect();
                 const x = event.clientX - rect.left;
                 const y = event.clientY - rect.top;
@@ -96,6 +99,7 @@
                 if (ws && ws.readyState === WebSocket.OPEN) {
                     const message = {
                         type: "Move",
+                        roomId: roomId,
                         id: playerId,
                         x: x,
                         y: y
