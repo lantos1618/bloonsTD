@@ -50,13 +50,19 @@
                 requestAnimationFrame(render);
             }
 
-            let roomId = prompt("room id?");
+            let roomId = prompt("Enter room ID:");
 
             // WebSocket Setup
             ws = new WebSocket('ws://' + window.location.host + '/ws');
 
             ws.onopen = () => {
                 console.log('Connected to the server');
+                // Send JoinRoom message
+                const message = {
+                    type: "JoinRoom",
+                    room_id: roomId
+                };
+                ws.send(JSON.stringify(message));
             };
 
             ws.onmessage = (message) => {
@@ -67,7 +73,7 @@
                     gameState.balls = data.balls;
                     gameState.emitters = data.emitters;
                     gameState.bases = data.bases;
-                } else if (data.type === "JoinRoom") {
+                } else if (data.type === "JoinedRoom") {
                     playerId = data.player_id;
                     console.log("Assigned player ID:", playerId);
                 } else {
@@ -76,10 +82,7 @@
             };
 
             ws.onclose = () => {
-                console.log('Disconnected from the server. Attempting to reconnect...');
-                setTimeout(() => {
-                    ws = new WebSocket('ws://' + window.location.host + '/ws');
-                }, 1000);
+                console.log('Disconnected from the server.');
             };
 
             ws.onerror = (error) => {
@@ -88,7 +91,6 @@
 
             canvas.addEventListener('click', (event) => {
                 if (!playerId) return;
-                console.log("aaa")
                 const rect = canvas.getBoundingClientRect();
                 const x = event.clientX - rect.left;
                 const y = event.clientY - rect.top;
@@ -99,8 +101,6 @@
                 if (ws && ws.readyState === WebSocket.OPEN) {
                     const message = {
                         type: "Move",
-                        roomId: roomId,
-                        id: playerId,
                         x: x,
                         y: y
                     };

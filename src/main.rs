@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
 use uuid::Uuid;
-
+use tokio::time::{timeout, Duration};
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 struct Player {
@@ -54,8 +54,13 @@ struct GameRoom {
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(tag = "type")]
 enum GameMessage {
-    JoinRoom { room_id: String, player_id: String },
-    Move { id: String, x: f32, y: f32 },
+    // Client sends this to join a room
+    JoinRoom { room_id: String },
+    // Server responds with this after assigning a player_id
+    JoinedRoom { room_id: String, player_id: String },
+    // Client sends this to move
+    Move { x: f32, y: f32 },
+    // Server sends this to update game state
     GameState {
         players: Vec<Player>,
         balls: Vec<Ball>,
@@ -92,8 +97,26 @@ async fn websocket_handler(
     mut msg_stream: actix_ws::MessageStream,
     app_state: web::Data<Arc<AppState>>,
 ) {
-    let player_id = Uuid::new_v4().to_string();
-    let room_id = "default_room".to_string(); // For now, using a default room
+    // Wait for JoinRoom message
+    let first_message = msg_stream.next().await;
+
+    let (room_id, player_id) = if let Some(Ok(Message::Text(text))) = first_message {
+        let game_msg: GameMessage = serde_json::from_str(&text).unwrap();
+        match game_msg {
+            GameMessage::JoinRoom { room_id } => {
+                let player_id = Uuid::new_v4().to_string();
+                (room_id, player_id)
+            }
+            _ => {
+                // Unexpected message
+                session.close(None).await.unwrap();
+                return;
+            }
+        }
+    } else {
+        // Connection closed or invalid message
+        return;
+    };
 
     let (tx, mut rx) = mpsc::unbounded_channel();
     app_state
@@ -104,8 +127,8 @@ async fn websocket_handler(
         .or_insert_with(Vec::new)
         .push(tx.clone());
 
-    // Send JoinRoom message to client
-    let join_msg = GameMessage::JoinRoom {
+    // Send JoinedRoom message to client
+    let join_msg = GameMessage::JoinedRoom {
         room_id: room_id.clone(),
         player_id: player_id.clone(),
     };
@@ -138,19 +161,22 @@ async fn websocket_handler(
     actix_web::rt::spawn(async move {
         while let Some(msg) = rx.recv().await {
             if let Message::Text(text) = msg {
-                // Convert ByteString to String using to_string_lossy() to handle non-UTF-8
-                session_clone.text(text.to_string()).await.unwrap();
+                // Set a timeout for the send operation
+                if let Err(e) = timeout(Duration::from_secs(5), session_clone.text(text.to_string())).await {
+                    eprintln!("Failed to send message to client within timeout: {:?}", e);
+                    // Optionally, you can close the session here if needed
+                    let _ = session_clone.close(None).await;
+                    break;
+                }
             }
         }
     });
-    
-    
 
     while let Some(Ok(msg)) = msg_stream.next().await {
         if let Message::Text(text) = msg {
             let game_msg: GameMessage = serde_json::from_str(&text).unwrap();
             println!("< {:?}", game_msg);
-            handle_game_message(&app_state, game_msg, room_id.clone()).await;
+            handle_game_message(&app_state, game_msg, room_id.clone(), player_id.clone()).await;
         }
     }
 
@@ -178,16 +204,22 @@ async fn handle_game_message(
     app_state: &web::Data<Arc<AppState>>,
     message: GameMessage,
     room_id: String,
+    player_id: String,
 ) {
     match message {
-        GameMessage::Move { id, x, y } => {
-            let mut rooms = app_state.rooms.lock().await;
-            if let Some(room) = rooms.get_mut(&room_id) {
-                if let Some(player) = room.players.iter_mut().find(|p| p.id == id) {
-                    player.x = x;
-                    player.y = y;
+        GameMessage::Move { x, y } => {
+            // Update the player's position
+            {
+                let mut rooms = app_state.rooms.lock().await;
+                if let Some(room) = rooms.get_mut(&room_id) {
+                    if let Some(player) = room.players.iter_mut().find(|p| p.id == player_id) {
+                        player.x = x;
+                        player.y = y;
+                    }
                 }
-            }
+            } // Lock is released here
+
+            // Now broadcast the updated game state
             broadcast_game_state(app_state.get_ref().clone(), &room_id).await;
         }
         _ => {}
@@ -195,22 +227,45 @@ async fn handle_game_message(
 }
 
 async fn broadcast_game_state(app_state: Arc<AppState>, room_id: &String) {
-    let rooms = app_state.rooms.lock().await;
-    if let Some(room) = rooms.get(room_id) {
-        let message = GameMessage::GameState {
-            players: room.players.clone(),
-            balls: room.balls.clone(),
-            emitters: room.emitters.clone(),
-            bases: room.bases.clone(),
-        };
-
-        let message_str = serde_json::to_string(&message).unwrap(); // Serialize to JSON
-
-        if let Some(clients) = app_state.clients.lock().await.get(room_id) {
-            for client in clients.iter() {
-                let _ = client.send(Message::Text(message_str.clone().into()));
-            }
+    // Retrieve room data without holding the lock during sending
+    let (players, balls, emitters, bases) = {
+        let rooms = app_state.rooms.lock().await;
+        if let Some(room) = rooms.get(room_id) {
+            (
+                room.players.clone(),
+                room.balls.clone(),
+                room.emitters.clone(),
+                room.bases.clone(),
+            )
+        } else {
+            // Room not found
+            return;
         }
+    };
+
+    let message = GameMessage::GameState {
+        players,
+        balls,
+        emitters,
+        bases,
+    };
+
+    let message_str = serde_json::to_string(&message).unwrap(); // Serialize to JSON
+
+    // Retrieve clients without holding the lock during sending
+    let clients = {
+        let clients_lock = app_state.clients.lock().await;
+        if let Some(clients) = clients_lock.get(room_id) {
+            clients.clone()
+        } else {
+            // No clients in this room
+            return;
+        }
+    };
+
+    // Now send the message to each client without holding any locks
+    for client in clients.iter() {
+        let _ = client.send(Message::Text(message_str.clone().into()));
     }
 }
 
