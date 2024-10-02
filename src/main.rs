@@ -732,7 +732,7 @@ async fn main() -> std::io::Result<()> {
             .route("/ws", web::get().to(ws))
             .service(actix_files::Files::new("/static", "./static"))
     })
-    .bind("127.0.0.1:8080")?
+    .bind("0.0.0.0:5000")?
     .run()
     .await
 }
