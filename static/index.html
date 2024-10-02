@@ -2,105 +2,174 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Multiplayer Game with Emitters and Bases</title>
+    <title>Multiplayer Balloon Tower Defense</title>
     <style>
         #canvas {
             width: 100%;
             height: 100%;
+            display: block;
         }
         body, html {
             margin: 0;
             padding: 0;
             overflow: hidden;
+            background-color: #f0f0f0;
+        }
+        #overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(240, 240, 240, 0.8);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-direction: column;
+        }
+        #roomInput {
+            font-size: 1.5em;
+            padding: 10px;
+        }
+        #joinButton {
+            font-size: 1.5em;
+            padding: 10px;
+            margin-top: 10px;
+        }
+        #gameInterface {
+            position: relative;
+            width: 100%;
+            height: 100%;
+        }
+        #playerList {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(255, 255, 255, 0.7);
+            padding: 10px;
+            border-radius: 5px;
+        }
+        #startButton {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            font-size: 1em;
+            padding: 10px;
+            display: none;
         }
     </style>
 </head>
 <body>
-    <canvas id="canvas"></canvas>
+    <div id="overlay">
+        <input type="text" id="roomInput" placeholder="Enter Room ID" />
+        <button id="joinButton">Join Room</button>
+    </div>
+    <div id="gameInterface" style="display: none;">
+        <div id="playerList"></div>
+        <button id="startButton">Start Game</button>
+        <canvas id="canvas"></canvas>
+    </div>
     <script>
         let ws;
         let playerId = null;
+        let gameState = null;
+        let gameOver = false;
 
         document.addEventListener("DOMContentLoaded", () => {
             const canvas = document.getElementById("canvas");
             const ctx = canvas.getContext("2d");
+            const overlay = document.getElementById("overlay");
+            const roomInput = document.getElementById("roomInput");
+            const joinButton = document.getElementById("joinButton");
+            const gameInterface = document.getElementById("gameInterface");
+            const playerListDiv = document.getElementById("playerList");
+            const startButton = document.getElementById("startButton");
 
-            canvas.width = window.innerWidth;
-            canvas.height = window.innerHeight;
+            // Set the canvas size (matching the server's canvas size)
+            const canvasWidth = 800;
+            const canvasHeight = 600;
+            canvas.width = canvasWidth;
+            canvas.height = canvasHeight;
 
-            let gameState = {
-                lastFrameTime: 0,
-                balls: [],
-                grid: [],
-                players: [],
-                emitters: [],
-                bases: []
-            };
+            joinButton.addEventListener("click", () => {
+                const roomId = roomInput.value.trim();
+                if (roomId) {
+                    overlay.style.display = "none";
+                    gameInterface.style.display = "block";
+                    startGame(roomId);
+                }
+            });
 
-            function render() {
-                ctx.clearRect(0, 0, canvas.width, canvas.height);
+            startButton.addEventListener("click", () => {
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                    const message = {
+                        type: "StartGame"
+                    };
+                    ws.send(JSON.stringify(message));
+                    startButton.style.display = "none"; // Hide after starting
+                }
+            });
 
-                // Render all players
-                gameState.players.forEach(player => {
-                    ctx.fillStyle = player.color;
-                    ctx.fillRect(player.x - 10, player.y - 10, 20, 20);
+            function startGame(roomId) {
+                // WebSocket Setup
+                ws = new WebSocket('ws://' + window.location.host + '/ws');
+
+                ws.onopen = () => {
+                    console.log('Connected to the server');
+                    // Send JoinRoom message
+                    const message = {
+                        type: "JoinRoom",
+                        room_id: roomId
+                    };
+                    ws.send(JSON.stringify(message));
+                };
+
+                ws.onmessage = (message) => {
+                    const data = JSON.parse(message.data);
+                    if (data.type === "GameState") {
+                        // Remove the type field and assign the rest to gameState
+                        delete data.type;
+                        gameState = data;
+                    } else if (data.type === "JoinedRoom") {
+                        playerId = data.player_id;
+                        console.log("Assigned player ID:", playerId);
+                    } else if (data.type === "GameOver") {
+                        alert(`Game Over! ${data.winner_color} player wins!`);
+                        gameOver = true;
+                        ws.close();
+                    } else if (data.type === "PlayerList") {
+                        updatePlayerList(data.players, data.host_id);
+                    } else {
+                        console.error("Unexpected message", data);
+                    }
+                };
+
+                ws.onclose = () => {
+                    console.log('Disconnected from the server.');
+                    gameOver = true;
+                };
+
+                ws.onerror = (error) => {
+                    console.error('WebSocket Error: ', error);
+                };
+
+                canvas.addEventListener('click', (event) => {
+                    if (!playerId || !gameState || gameOver || !gameState.game_started) return;
+                    const rect = canvas.getBoundingClientRect();
+                    const scaleX = canvas.width / rect.width;
+                    const scaleY = canvas.height / rect.height;
+                    const x = (event.clientX - rect.left) * scaleX;
+                    const y = (event.clientY - rect.top) * scaleY;
+                    sendPlaceEmitter(x, y);
                 });
 
-                gameState.lastFrameTime = performance.now();
                 requestAnimationFrame(render);
             }
 
-            let roomId = prompt("Enter room ID:");
-
-            // WebSocket Setup
-            ws = new WebSocket('ws://' + window.location.host + '/ws');
-
-            ws.onopen = () => {
-                console.log('Connected to the server');
-                // Send JoinRoom message
-                const message = {
-                    type: "JoinRoom",
-                    room_id: roomId
-                };
-                ws.send(JSON.stringify(message));
-            };
-
-            ws.onmessage = (message) => {
-                console.log("Received message:", message.data);
-                const data = JSON.parse(message.data);
-                if (data.type === "GameState") {
-                    gameState.players = data.players;
-                    gameState.balls = data.balls;
-                    gameState.emitters = data.emitters;
-                    gameState.bases = data.bases;
-                } else if (data.type === "JoinedRoom") {
-                    playerId = data.player_id;
-                    console.log("Assigned player ID:", playerId);
-                } else {
-                    console.error("Unexpected message", data);
-                }
-            };
-
-            ws.onclose = () => {
-                console.log('Disconnected from the server.');
-            };
-
-            ws.onerror = (error) => {
-                console.error('WebSocket Error: ', error);
-            };
-
-            canvas.addEventListener('click', (event) => {
-                if (!playerId) return;
-                const rect = canvas.getBoundingClientRect();
-                const x = event.clientX - rect.left;
-                const y = event.clientY - rect.top;
-                sendMove(x, y);
-            });
-
-            function sendMove(x, y) {
+            function sendPlaceEmitter(x, y) {
                 if (ws && ws.readyState === WebSocket.OPEN) {
                     const message = {
-                        type: "Move",
+                        type: "PlaceEmitter",
                         x: x,
                         y: y
                     };
@@ -108,7 +177,102 @@
                 }
             }
 
-            requestAnimationFrame(render);
+            function getPlayerColor(playerId) {
+                const player = gameState.players.find(p => p.id === playerId);
+                return player ? player.color : 'black';
+            }
+
+            function getPlayerBalloonColor(playerId) {
+                const player = gameState.players.find(p => p.id === playerId);
+                return player ? player.balloon_color : 'gray';
+            }
+
+            function updatePlayerList(players, hostId) {
+                playerListDiv.innerHTML = "<strong>Players:</strong><br/>";
+                players.forEach(player => {
+                    const playerItem = document.createElement("div");
+                    playerItem.textContent = player.color + (player.id === hostId ? " (Host)" : "");
+                    playerListDiv.appendChild(playerItem);
+                });
+
+                // Show start button if this client is the host and game hasn't started
+                if (playerId === hostId && (!gameState || !gameState.game_started)) {
+                    startButton.style.display = "block";
+                } else {
+                    startButton.style.display = "none";
+                }
+            }
+
+            function render() {
+                if (!gameState || gameOver) {
+                    requestAnimationFrame(render);
+                    return;
+                }
+
+                if (!gameState.game_started) {
+                    // Game hasn't started yet
+                    ctx.clearRect(0, 0, canvas.width, canvas.height);
+                    ctx.fillStyle = 'black';
+                    ctx.font = '24px Arial';
+                    ctx.textAlign = 'center';
+                    ctx.fillText('Waiting for host to start the game...', canvas.width / 2, canvas.height / 2);
+                    requestAnimationFrame(render);
+                    return;
+                }
+
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+                // Render grid cells
+                gameState.grid.forEach(cell => {
+                    ctx.fillStyle = cell.owner ? getPlayerColor(cell.owner) : 'white';
+                    ctx.fillRect(cell.x, cell.y, cell.w, cell.h);
+                    ctx.strokeStyle = "rgba(0, 0, 0, 0.1)";
+                    ctx.strokeRect(cell.x, cell.y, cell.w, cell.h);
+                });
+
+                // Render balloons
+                gameState.balloons.forEach(balloon => {
+                    ctx.fillStyle = getPlayerBalloonColor(balloon.player_id);
+                    ctx.beginPath();
+                    ctx.arc(balloon.x, balloon.y, balloon.radius, 0, Math.PI * 2);
+                    ctx.fill();
+
+                    // Draw health indicators
+                    ctx.fillStyle = 'white';
+                    ctx.font = '12px Arial';
+                    ctx.fillText(balloon.health, balloon.x - 4, balloon.y + 4);
+                });
+
+                // Render emitters
+                gameState.emitters.forEach(emitter => {
+                    ctx.fillStyle = getPlayerColor(emitter.player_id);
+                    ctx.beginPath();
+                    ctx.arc(emitter.x, emitter.y, 15, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.strokeStyle = 'white';
+                    ctx.lineWidth = 2;
+                    ctx.stroke();
+
+                    // Draw health indicators
+                    ctx.fillStyle = 'white';
+                    ctx.font = '12px Arial';
+                    ctx.fillText(emitter.health, emitter.x - 4, emitter.y + 4);
+                });
+
+                // Render bases
+                gameState.bases.forEach(base => {
+                    ctx.fillStyle = getPlayerColor(base.player_id);
+                    ctx.fillRect(base.x - base.size / 2, base.y - base.size / 2, base.size, base.size);
+
+                    // Health bar
+                    ctx.fillStyle = 'red';
+                    ctx.fillRect(base.x - base.size / 2, base.y - base.size / 2 - 10, base.size, 5);
+                    ctx.fillStyle = 'green';
+                    ctx.fillRect(base.x - base.size / 2, base.y - base.size / 2 - 10, base.size * (base.health / 100), 5);
+                });
+
+                requestAnimationFrame(render);
+            }
         });
     </script>
 </body>
